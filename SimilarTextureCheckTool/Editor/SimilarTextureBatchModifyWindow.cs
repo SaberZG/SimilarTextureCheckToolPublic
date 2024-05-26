@@ -26,6 +26,24 @@ namespace SimilarTextureCheckTool
             public string AtlasTexPath = String.Empty;
             public string TexFileIdInAtlasTex = String.Empty;
 
+            public BatchData(Texture2D tex)
+            {
+                Tex = tex;
+                TexPath = AssetDatabase.GetAssetPath(tex);
+                TexGUID = AssetDatabase.AssetPathToGUID(TexPath);
+                string searchTexFullPath = Path.Combine(Directory.GetCurrentDirectory(), TexPath);
+                TexFileInfo = new FileInfo(searchTexFullPath);
+                
+                // 尝试添加对比图对应的图集信息
+                SimilarTextureCheckToolUtil.TryGetSpriteFileIdInAtlasTextureBySourceTexture(tex,
+                    out AtlasTex, out TexFileIdInAtlasTex);
+                if (!string.Empty.Equals(TexFileIdInAtlasTex))
+                {
+                    AtlasTexPath = AssetDatabase.GetAssetPath(AtlasTex);
+                    AtlasTexGUID = AssetDatabase.AssetPathToGUID(AtlasTexPath);
+                }
+            }
+            
             public BatchData(string texPath)
             {
                 TexPath = texPath;
@@ -331,6 +349,7 @@ namespace SimilarTextureCheckTool
         }
 
         private Vector2 copyTexScrollPos = Vector2.zero;
+
         // 若配置了拷贝目录文件夹，则将相似的纹理列出来
         private void DrawSimilarTextureInCopyFolder()
         {
@@ -347,18 +366,92 @@ namespace SimilarTextureCheckTool
                 
                 return;
             }
-            // todo 因为实际项目中的公共图片还是太多了，需要改成按需加载
-            copyTexScrollPos = EditorGUILayout.BeginScrollView(copyTexScrollPos,GUILayout.MinHeight(100), GUILayout.MaxHeight(300));
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            foreach (var batchData in copyFolderDoubleMatchedBatchData)
+            // 优化版本，由于项目内的公共图片也太多了，因此这里也改成按需加载
+            float rectHeight = 0;
+            float totalHeight = 0;
+            totalHeight = copyFolderDoubleMatchedBatchData.Count * (GetTextureInfoHeight() + 5) + 50;
+            rectHeight = Math.Min(totalHeight, 300);
+            Rect copyScrollRect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.ExpandWidth(true), GUILayout.Height(rectHeight));
+            copyTexScrollPos = GUI.BeginScrollView(copyScrollRect, copyTexScrollPos, new Rect(0, 0, copyScrollRect.width - 15, totalHeight));
+            UpdateTextureInfosAndReplaceBtn(copyScrollRect, copyTexScrollPos);
+            GUI.EndScrollView();
+        }
+
+        private void UpdateTextureInfosAndReplaceBtn(Rect rect, Vector2 scrollPos)
+        {
+            int startIndex = -1;
+            float curHeight = 0; // 当前节点放置的高度
+            float showRectEnd = scrollPos.y + rect.height; // 滚动容器内可视范围底部位置
+            for (int k = 0; k < copyFolderDoubleMatchedBatchData.Count; k++)
             {
-                DrawTextureInfosAndReplaceBtn(batchData, false, true);
+                BatchData batchData = copyFolderDoubleMatchedBatchData[k];
+                float itemHeight = GetTextureInfoHeight();
+                // 判断当前节点的高度是否在可视范围内
+                bool show = curHeight <= showRectEnd && (curHeight + itemHeight > scrollPos.y);
+                if (show)
+                {
+                    startIndex = startIndex == -1 ? k : startIndex;
+                    DrawCopyTextureInfo(rect, curHeight, itemHeight, batchData);
+                }
+                else
+                {
+                    if (startIndex != -1) break;
+                }
+
+                curHeight += itemHeight + 5;
             }
-            // 画一个空的添加按钮
-            DrawTextureInfosAndReplaceBtn(null, false, true);
+            // 最后面固定添加一个复制图片按钮
+            GUI.Box(new Rect(0, curHeight, rect.width, 50), GUIContent.none, EditorStyles.helpBox);
+            GUI.enabled = searchTexBatchData != null;
+            if (GUI.Button(new Rect(5, curHeight + 5, parent.previewTexSize, 40), "复制搜索图片"))
+            {
+                CopySearchTextureToCopyPath();
+            }
+            GUI.enabled = true;
+        }
+        private void DrawCopyTextureInfo(Rect rect, float height, float itemHeight, BatchData batchData)
+        {
+            int previewTexSize = parent.previewTexSize;
+            GUI.Box(new Rect(0, height, rect.width, itemHeight), GUIContent.none, EditorStyles.helpBox);
+            float startHeight = height + 5;
+            // 当前查看的图片的信息，需要详实地罗列出来
+            Rect btnRect = new Rect(5, startHeight, previewTexSize, previewTexSize);
+            if (GUI.Button(btnRect, batchData.Tex))
+            {
+                EditorGUIUtility.PingObject(batchData.Tex); 
+            }
+            float detailHeight = 16;
+            float detailSpace = 20;
+            float h = previewTexSize > 100 ? previewTexSize : 100;
             
-            EditorGUILayout.EndVertical();
-            EditorGUILayout.EndScrollView();
+            // 图片信息在这边补充
+            float contentYOffset = (h - detailSpace * 4) / 2 ;
+            
+            GUI.Label(new Rect(previewTexSize + 10, startHeight + contentYOffset, rect.width - previewTexSize, detailHeight),
+                string.Format("搜索图片名称：{0}", batchData.Tex.name));
+            GUI.Label(new Rect(previewTexSize + 10, startHeight + detailSpace + contentYOffset, rect.width - previewTexSize, detailHeight),
+                string.Format("搜索图片所在路径：{0}", batchData.TexPath));
+            GUI.Label(new Rect(previewTexSize + 10, startHeight + detailSpace * 2 + contentYOffset, rect.width - previewTexSize, detailHeight),
+                string.Format("搜索图片尺寸：{0}x{1}", batchData.Tex.width, batchData.Tex.height));
+            if (batchData.TexFileInfo != null)
+            {
+                GUI.Label(new Rect(previewTexSize + 10, startHeight + detailSpace * 3 + contentYOffset, rect.width - previewTexSize, detailHeight),
+                    string.Format("搜索图片大小：{0} KB", (batchData.TexFileInfo.Length / 1024d).ToString("F")));
+            }
+            GUI.enabled = mainReplaceBatchData != batchData;
+            if (GUI.Button(new Rect(previewTexSize + 10, startHeight + detailSpace * 4 + contentYOffset, 240, detailHeight), 
+                    "将这个图片作为替换用图片"))
+            {
+                SelectAsMainReplaceData(batchData, true);
+            }
+            GUI.enabled = true;
+        }
+
+        private float GetTextureInfoHeight()
+        {
+            float h = parent.previewTexSize > 100 ? parent.previewTexSize : 100;
+            h += 10;// top and bottom offsets
+            return h;
         }
         
         private void DrawReferencesInfos()
@@ -704,14 +797,12 @@ namespace SimilarTextureCheckTool
         
         private BatchAssetViewItem AllReferenceToRootItem()
         {
-            if (isSingleTexture)
+            if (isSingleTexture) // 单图操作的时候，不显示匹配类型的child，直接列出引用对象
             {
                 return AllReferenceToRootItemForSingleTexData();
             }
-            else
-            {
-                return AllReferenceToRootItemForMultiTexData();
-            }
+
+            return AllReferenceToRootItemForMultiTexData();
         }
         
         private BatchAssetViewItem AllReferenceToRootItemForSingleTexData()
@@ -725,32 +816,15 @@ namespace SimilarTextureCheckTool
             // 当前搜索的图片数据整合treeChild
             if (replaceDataIsCopyData && searchTexBatchData != null)
             {
-                BatchAssetViewItem child = CreateTree(searchTexBatchData.TexGUID, ref elementCount, depth, stack, searchTexBatchData);
-                if (child != null)
-                    root.AddChild(child);
-                // 尝试添加图片对应的图集信息
-                if (!string.Empty.Equals(searchTexBatchData.TexFileIdInAtlasTex))
-                {
-                    var atlasChild = CreateTree(searchTexBatchData.AtlasTexPath, ref elementCount, depth, stack, searchTexBatchData, true);
-                    if (atlasChild != null)
-                        root.AddChild(atlasChild);
-                }
+                CreateBatchDataTree(searchTexBatchData, ref elementCount, depth, stack, root);
             }
+            
             // 基本相同的图片数据整合treeChild
             if (doubleMatchTexBatchDataList.Count > 0)
             {
                 foreach (var batchData in doubleMatchTexBatchDataList)
                 {
-                    BatchAssetViewItem child = CreateTree(batchData.TexGUID, ref elementCount, depth, stack, batchData);
-                    if (child != null)
-                        root.AddChild(child);
-                    // 尝试添加图片对应的图集信息
-                    if (!string.Empty.Equals(batchData.TexFileIdInAtlasTex))
-                    {
-                        var atlasChild = CreateTree(batchData.AtlasTexPath, ref elementCount, depth, stack, batchData, true);
-                        if (atlasChild != null)
-                            root.AddChild(atlasChild);
-                    }
+                    CreateBatchDataTree(batchData, ref elementCount, depth, stack, root);
                 }
             }
             
@@ -759,16 +833,7 @@ namespace SimilarTextureCheckTool
             {
                 foreach (var batchData in singleMatchTexBatchDataList)
                 {
-                    BatchAssetViewItem child = CreateTree(batchData.TexGUID, ref elementCount, depth, stack, batchData);
-                    if (child != null)
-                        root.AddChild(child);
-                    // 尝试添加图片对应的图集信息
-                    if (!string.Empty.Equals(batchData.TexFileIdInAtlasTex))
-                    {
-                        var atlasChild = CreateTree(batchData.AtlasTexPath, ref elementCount, depth, stack, batchData, true);
-                        if (atlasChild != null)
-                            root.AddChild(atlasChild);
-                    }
+                    CreateBatchDataTree(batchData, ref elementCount, depth, stack, root);
                 }
             }
             
@@ -798,16 +863,7 @@ namespace SimilarTextureCheckTool
                     isDoubleMatchTitle = true
                 };
                 root.AddChild(titleSearch);
-                BatchAssetViewItem child = CreateTree(searchTexBatchData.TexGUID, ref elementCount, depth + 1, stack, searchTexBatchData);
-                if (child != null)
-                    titleSearch.AddChild(child);
-                // 尝试添加图片对应的图集信息
-                if (!string.Empty.Equals(searchTexBatchData.TexFileIdInAtlasTex))
-                {
-                    var atlasChild = CreateTree(searchTexBatchData.AtlasTexPath, ref elementCount, depth + 1, stack, searchTexBatchData, true);
-                    if (atlasChild != null)
-                        titleSearch.AddChild(atlasChild);
-                }
+                CreateBatchDataTree(searchTexBatchData, ref elementCount, depth + 1, stack, titleSearch);
             }
             
             // 基本相同的图片数据整合treeChild
@@ -825,16 +881,7 @@ namespace SimilarTextureCheckTool
             {
                 foreach (var batchData in doubleMatchTexBatchDataList)
                 {
-                    BatchAssetViewItem child = CreateTree(batchData.TexGUID, ref elementCount, depth + 1, stack, batchData);
-                    if (child != null)
-                        titleDouble.AddChild(child);
-                    // 尝试添加图片对应的图集信息
-                    if (!string.Empty.Equals(batchData.TexFileIdInAtlasTex))
-                    {
-                        var atlasChild = CreateTree(batchData.AtlasTexPath, ref elementCount, depth + 1, stack, batchData, true);
-                        if (atlasChild != null)
-                            titleDouble.AddChild(atlasChild);
-                    }
+                    CreateBatchDataTree(batchData, ref elementCount, depth + 1, stack, titleDouble);
                 }
             }
             
@@ -853,21 +900,34 @@ namespace SimilarTextureCheckTool
             {
                 foreach (var batchData in singleMatchTexBatchDataList)
                 {
-                    BatchAssetViewItem child = CreateTree(batchData.TexGUID, ref elementCount, depth + 1, stack, batchData);
-                    if (child != null)
-                        titleSingle.AddChild(child);
-                    // 尝试添加图片对应的图集信息
-                    if (!string.Empty.Equals(batchData.TexFileIdInAtlasTex))
-                    {
-                        var atlasChild = CreateTree(batchData.AtlasTexPath, ref elementCount, depth + 1, stack, batchData, true);
-                        if (atlasChild != null)
-                            titleSingle.AddChild(atlasChild);
-                    }
+                    CreateBatchDataTree(batchData, ref elementCount, depth + 1, stack, titleSingle);
                 }
             }
             
             updatedAssetSet.Clear();
             return root;
+        }
+
+        /// <summary>
+        /// 基于BatchData构建treeItem逻辑封装
+        /// </summary>
+        /// <param name="batchData"></param>
+        /// <param name="elementCount">当前已有的元素数量</param>
+        /// <param name="depth">深度</param>
+        /// <param name="stack"></param>
+        /// <param name="attachItem">创建出来的子节点要挂载的目标节点</param>
+        private void CreateBatchDataTree(BatchData batchData, ref int elementCount, int depth, Stack<string> stack, BatchAssetViewItem attachItem)
+        {
+            BatchAssetViewItem child = CreateTree(batchData.TexGUID, ref elementCount, depth, stack, batchData);
+            if (child != null)
+                attachItem.AddChild(child);
+            // 尝试添加图片对应的图集信息
+            if (!string.Empty.Equals(batchData.TexFileIdInAtlasTex))
+            {
+                var atlasChild = CreateTree(batchData.AtlasTexPath, ref elementCount, depth, stack, batchData, true);
+                if (atlasChild != null)
+                    attachItem.AddChild(atlasChild);
+            }
         }
         
         //通过每个节点的数据生成子节点
@@ -1034,6 +1094,10 @@ namespace SimilarTextureCheckTool
                     {
                         tempDict.Add(keyTexPath, true);
                     }
+                    // 更新引用缓存
+                    Dictionary<string, string> modifiedDic = new Dictionary<string, string>();
+                    modifiedDic.Add(guid, AssetDatabase.GUIDToAssetPath(guid));
+                    parent.UpdateReferenceInfoAfterReplacement(fromGUID, toGUID, modifiedDic);
                 }
             }
         }
@@ -1059,6 +1123,10 @@ namespace SimilarTextureCheckTool
                     {
                         tempDict.Add(keyTexPath, false);
                     }
+                    // 更新引用缓存
+                    Dictionary<string, string> modifiedDic = new Dictionary<string, string>();
+                    modifiedDic.Add(guid, AssetDatabase.GUIDToAssetPath(guid));
+                    parent.UpdateReferenceInfoAfterReplacement(fromGUID, toGUID, modifiedDic);
                 }
             }
         }
@@ -1113,7 +1181,7 @@ namespace SimilarTextureCheckTool
             string toFileId = isReplace ? sFileId : cFileId;
             var targetDict = isAtlasRef ? guidAtlasReplacedDict : guidReplacedDict;
             Dictionary<string, Dictionary<string, bool>> tempResultDic = new Dictionary<string, Dictionary<string, bool>>();
-
+            Dictionary<string, string> modifiedDic = new Dictionary<string, string>();
             // 遍历当前所有的GUID字典，找到这个GUID中是否有关于keyTexPath的引用
             // 如果有，就替换或回滚这个GUID中的对应的图片引用
             foreach (var kv in targetDict)
@@ -1124,6 +1192,10 @@ namespace SimilarTextureCheckTool
                     var replaced = SimilarTextureCheckToolUtil.ModifyTargetAssetGUIDReference(kv.Key, fromGUID, toGUID, formFileId, toFileId, false);
                     tempResultDic.TryAdd(kv.Key, new Dictionary<string, bool>());
                     tempResultDic[kv.Key].TryAdd(keyTexPath, replaced);
+                    if (!modifiedDic.ContainsKey(kv.Key))
+                    {
+                        modifiedDic.Add(kv.Key, AssetDatabase.GUIDToAssetPath(kv.Key));
+                    }
                 }
             }
             
@@ -1159,6 +1231,10 @@ namespace SimilarTextureCheckTool
                     }
                 }
             }
+
+            // 更新引用缓存
+            parent.UpdateReferenceInfoAfterReplacement(fromGUID, toGUID, modifiedDic);
+            
             if (refreshAsset)
             {
                 AssetDatabase.Refresh();
@@ -1193,7 +1269,7 @@ namespace SimilarTextureCheckTool
         {
             if (parent != null)
             {
-                
+                parent.RemoveBatchModitySubWindow(this);
             }
         }
 

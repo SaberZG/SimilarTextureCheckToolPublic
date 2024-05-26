@@ -166,6 +166,31 @@ namespace SimilarTextureCheckTool
                 needLoadCacheDict.Add(guid, true);
             }
         }
+        /// <summary>
+        /// 删除资产后更新缓存
+        /// </summary>
+        /// <param name="path"></param>
+        private void DeleteAsset(string path)
+        {
+            if (!path.StartsWith("Assets/"))
+                return;
+
+            string guid = AssetDatabase.AssetPathToGUID(path);
+            if (assetDict.ContainsKey(guid))
+            {
+                AssetDescription ad = assetDict[guid];
+                // 找到guid依赖的资产，在这批关联的资产中移除对guid的引用
+                foreach (string depGUID in ad.dependencies)
+                {
+                    if (assetDict.ContainsKey(depGUID))
+                    {
+                        assetDict[depGUID].references.Remove(guid);
+                    }
+                }
+                // 删除键值数据
+                assetDict.Remove(guid);
+            }
+        }
 
         // 在ImportAsset结束后，处理被标记为需要重新从缓存中读取引用数据的部分
         private void ReadFromCacheAfterImports()
@@ -266,7 +291,84 @@ namespace SimilarTextureCheckTool
             }
             return true;
         }
+        
+        /// <summary>
+        /// 替换的操作流程是 [资产guidRes]引用了[相似的图片资产guidOld]被替换成了[新的图片资产guildNew]
+        /// 因此在替换完成后，要做三件事：
+        /// 1.guildNew相关的引用references要加上guidRes
+        /// 2.guildOld相关的引用references要去掉guidRes
+        /// 3.guidRes的dependencies要将guidOld换成guidNew
+        /// </summary>
+        /// <param name="guidOld"></param>
+        /// <param name="guidNew"></param>
+        /// <param name="refDatas">格式[guid] = [resPath]</param>
+        public void UpdateReferenceInfoAfterReplacement(string guidOld, string guidNew, Dictionary<string, string> refDatas)
+        {
+            AssetDescription dataOld = null;
+            if(assetDict.ContainsKey(guidOld))
+                dataOld = assetDict[guidOld];
+            AssetDescription dataNew = null;
+            if(assetDict.ContainsKey(guidNew))
+                dataNew = assetDict[guidNew];
+            // 删除旧引用缓存
+            if (dataOld != null && dataOld.references != null && dataOld.references.Count > 0)
+            {
+                for (int i = dataOld.references.Count - 1; i >= 0; i--)
+                {
+                    if (refDatas.ContainsKey(dataOld.references[i]))
+                    {
+                        dataOld.references.RemoveAt(i);
+                    }
+                }
+            }
+            
+            // 增加新引用，以及被修改的资产依赖缓存
+            foreach (var kv in refDatas)
+            {
+                if (dataNew != null && dataNew.references != null && !dataNew.references.Contains(kv.Key))
+                {
+                    dataNew.references.Add(kv.Key);
+                }
 
+                if (assetDict.ContainsKey(kv.Key))
+                {
+                    AssetDescription refData = assetDict[kv.Key];
+                    refData.dependencies.Remove(guidOld);
+                    if (!refData.dependencies.Contains(guidNew))
+                    {
+                        refData.dependencies.Add(guidNew);
+                    }
+                    refData.assetDependencyHash = AssetDatabase.GetAssetDependencyHash(kv.Value).ToString();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 为了避免重复的全局重载，这边实现一个增量新增引用数据的接口
+        /// </summary>
+        /// <param name="appendPathList">新增导入资产路径数据</param>
+        /// <param name="deletePathList">被删除资产路径数据</param>
+        public void UpdateAssetsData(List<string> appendPathList, List<string> deletePathList, bool saveCache = false)
+        {
+            foreach (var path in appendPathList)
+            {
+                ImportAsset(path);
+            }
+            foreach (var path in deletePathList)
+            {
+                DeleteAsset(path);
+            }
+            ReadFromCacheAfterImports();
+            if (saveCache)
+            {
+                EditorUtility.DisplayCancelableProgressBar("Refresh", "Write to cache", 1f);
+                WriteToChache();
+            }
+            EditorUtility.DisplayCancelableProgressBar("Refresh", "Generating asset reference info", 1f);
+            UpdateReferenceInfo();
+            EditorUtility.ClearProgressBar();
+        }
+        
         //写入缓存
         private void WriteToChache()
         {
@@ -303,6 +405,16 @@ namespace SimilarTextureCheckTool
                 bf.Serialize(fs, serializedDependencyHash);
                 bf.Serialize(fs, serializedDenpendencies);
             }
+        }
+        
+        /// <summary>
+        /// 保存缓存到目标文件夹内
+        /// </summary>
+        public void SaveAllCacheToDisk()
+        {
+            EditorUtility.DisplayCancelableProgressBar("Refresh", "Write to cache", 1f);
+            WriteToChache();
+            EditorUtility.ClearProgressBar();
         }
         
         //更新引用信息状态

@@ -8,14 +8,11 @@ using UnityEngine;
 
 namespace SimilarTextureCheckTool
 {
-    [Serializable]
-    public class SimilarTextureCacheAsset : ScriptableObject
+    public class SimilarTextureCacheAsset
     {
         // 编辑下使用的数据，方便读取存储
-        [NonSerialized]
         public Dictionary<string, SimilarTextureCacheData> cacheSimilarDict = new Dictionary<string, SimilarTextureCacheData>();
         // 最终存储下来的列表数据
-        [SerializeField]
         public List<SimilarTextureCacheData> savedCacheDataList = new List<SimilarTextureCacheData>();
 
     #if UNITY_EDITOR
@@ -101,11 +98,8 @@ namespace SimilarTextureCheckTool
     [Serializable]
     public class SimilarTextureCacheData
     {
-        [SerializeField]
         public string texturePath;
-        [SerializeField]
         public string perceptualHash;
-        [SerializeField]
         public List<double> ImageHistogramData;
     }
 }

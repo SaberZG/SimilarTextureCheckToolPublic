@@ -16,9 +16,13 @@ namespace SimilarTextureCheckTool
         public static readonly string CacheDataSavePath = "Library/SimilarTextureCheckToolCacheData"; // 二进制序列化
         public static readonly string ModifyPathsSavePath = "Library/ModifyPathsCacheData"; // 修改到的文件缓存路径
         
+        // prefKey
         public static readonly string ImageHistogramThresholdKey = "ImageHistogramThresholdKey";
-        public static readonly double ImageHistogramThresholdDefault = 0.9d;
         public static readonly string PerceptualHashThresholdKey = "PerceptualHashThresholdKey";
+        public static readonly string FoldOutDrawTipInfosKey = "FoldOutDrawTipInfosKey";
+        public static readonly string FoldOutDrawTargetFolderKey = "FoldOutDrawTargetFolderKey";
+        
+        public static readonly double ImageHistogramThresholdDefault = 0.9d;
         public static readonly int PerceptualHashThresholdDefault = 3;
         public static readonly string LimitCompareTexturePathName = "LimitCompareTexturePathName";
         public static readonly string AtlasTextureRootPathName = "AtlasTextureRootPathName";
@@ -28,6 +32,8 @@ namespace SimilarTextureCheckTool
 而sprite指向图集而非源texture，因此无法从sprite追溯到源texture
 因此，在使用本工具前，默认assets内图集和源texture都还存在，且已经将图集和源texture分开存储
 这里需要使用前标记好项目中的atlas和源texture的目录，以便sprite类型的图片可以正确查找相似图片";
+
+        public static readonly string TargetFolderWarningTips = "如果设置了此文件夹，则会预计算这个文件夹内的图片特征信息，并只对这个文件夹内的图片进行相似性比对";
 
         public static readonly string DoubleMatchTitle = "基本相同的图片资产列表(点击图片单个操作)";
         public static readonly string SingleMatchTitle = "有可能相同的图片资产列表(两个对比算法只满足了一个，点击图片单个操作)";
@@ -47,6 +53,19 @@ namespace SimilarTextureCheckTool
         private static int IHThreadNum = 16; // IH线程数，与CS对应
 
         #region 公共方法
+        
+        public static void FilterTextureAssetPaths(List<string> assetPaths, ref List<string> list)
+        {
+            list.Clear();
+            foreach (var path in assetPaths)
+            {
+                string ext = Path.GetExtension(path);
+                if (TextureExtensions.Contains(ext))
+                {
+                    list.Add(path);
+                }
+            }
+        }
         
         /// <summary>
         /// 将一份纹理复制并存储到指定目录下
@@ -82,7 +101,7 @@ namespace SimilarTextureCheckTool
                 copyTex.Apply();
                 
                 RenderTexture.active = null;
-                // 打开保存文件的对话框，用户可指定文件名和位置
+                // 打开保存文件的对话框，可指定文件名和位置
                 finalSavePath = EditorUtility.SaveFilePanel("复制当前搜索图片", directory, 
                     "copy_" + copyTex.name + ".png", "png");
                 // 将Texture2D转换为PNG格式的字节数据
@@ -92,7 +111,7 @@ namespace SimilarTextureCheckTool
                     // 写入文件
                     File.WriteAllBytes(finalSavePath, pngData);
 
-                    // 这里可以加入你的“完成回调”逻辑
+                    // 这里可以加入你的 完成回调
                     Debug.LogFormat("Texture 存储在 {0}", finalSavePath);
                     AssetDatabase.Refresh();
                     // 检查是否存储在目标的路径下，否则弹出提示但不拦截
@@ -115,7 +134,7 @@ namespace SimilarTextureCheckTool
         /// <param name="toGUID">将fromGUID替换成此toGUID所代表的资产</param>
         /// <param name="fromFileId">图集情况时有效，将被替换掉的图集FileId</param>
         /// <param name="toFileId">图集情况时有效，用于替换fromFileId</param>
-        /// <param name="isSingle">是否是单个操作，true时修改后会自动保存</param>
+        /// <param name="isSingle">是否是单个操作，true时修改后调度资产保存和刷新逻辑</param>
         /// <returns></returns>
         public static bool ModifyTargetAssetGUIDReference(
             string guid, 
@@ -130,7 +149,6 @@ namespace SimilarTextureCheckTool
             string sysPath = relatePath.Replace("Assets", Application.dataPath);
             bool needReplaceFileId = !string.Empty.Equals(fromFileId) && !string.Empty.Equals(toFileId); 
             
-
             if (needReplaceFileId)
             {
                 // 按行读取文件内容
@@ -208,6 +226,16 @@ namespace SimilarTextureCheckTool
             }
         }
 
+        /***************************************************************************************
+        图集替换特别说明：
+            由于unity打包图集之后，会丢失sprite和源texture的关联，因此追溯时无法通过源texture与sprite(或图集)彼此匹配
+            因此这部分逻辑的生效前提，是【用于生成图集atlas的源texture】还存在于项目目录
+            且，生成的图集atlas资产的名字与包含了相关的源textures的文件夹名称相同
+            例如：图集atlas的名称atlas001.png，其中的sprite分别是tex001，tex002...等sprite
+            与之对应的源texture的文件夹名称为atlas001,文件夹内有tex001.png，tex002.png...等图片资源
+            如果不满足上面的情况，则图集相关的功能需要根据实际情况重写逻辑
+        ***************************************************************************************/ 
+        
         /// <summary>
         /// 是否配置了图集和源texture路径
         /// </summary>
@@ -334,6 +362,12 @@ namespace SimilarTextureCheckTool
             }
         }
 
+        /// <summary>
+        /// 查找位于path路径下的所有图片资源，找到匹配textureName的路径
+        /// </summary>
+        /// <param name="textureName"></param>
+        /// <param name="path"></param>
+        /// <returns></returns>
         public static Texture2D TryFindTextureByNameAndPath(string textureName, string path)
         {
             var allTexturePath = Directory.GetFiles(path, "*.*", SearchOption.AllDirectories)
@@ -383,7 +417,7 @@ namespace SimilarTextureCheckTool
         }
         
         /// <summary>
-        /// 判断这个texture是否是图集，如果是则返回其相关的源texture，替换掉调度处的目标texture
+        /// 判断这个texture是否是图集，如果是则返回其相关的源texture，替换掉调度传来的texture
         /// </summary>
         /// <param name="texture"></param>
         /// <returns></returns>
@@ -410,7 +444,11 @@ namespace SimilarTextureCheckTool
             
             return retList.Count > 0 ? retList : null;
         }
-
+        /// <summary>
+        /// 将文件夹路径下的图片资源都添加到list列表内
+        /// </summary>
+        /// <param name="folderPath"></param>
+        /// <param name="list"></param>
         public static void TryAppendAllTexturesFormSourceTextureFolder(string folderPath, ref List<Texture2D> list)
         {
             var allTexturePath = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories)
@@ -630,6 +668,9 @@ namespace SimilarTextureCheckTool
             return h;
         }
 
+        /// <summary>
+        /// 感知哈希值差距计算，差距越小代表两张图的低频信息越接近，越有可能相似
+        /// </summary>
         public static int PerceptualDistance(string hashA, string hashB)
         {
             if (string.Empty.Equals(hashA) || string.Empty.Equals(hashB)) return 32;
@@ -709,7 +750,7 @@ namespace SimilarTextureCheckTool
         }
         
         /// <summary>
-        /// 计算直方图相似程度，超过0.8就可以基本判定为两张图相似
+        /// 计算直方图相似程度，超过0.95就可以基本判定两张图的颜色分布近似
         /// </summary>
         /// <returns>相似程度值（0.0~1.0）</returns>
         public static double CalcSimilarity(double[] data1, double[] data2) {

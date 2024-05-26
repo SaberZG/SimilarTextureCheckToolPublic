@@ -37,6 +37,8 @@ namespace SimilarTextureCheckTool
         #region 对比所需属性
         public double ImageHistogramThreshold = SimilarTextureCheckToolUtil.ImageHistogramThresholdDefault;
         public int PerceptualHashThreshold = SimilarTextureCheckToolUtil.PerceptualHashThresholdDefault;
+        private bool FoldOutDrawTipInfos = false;
+        private bool FoldOutDrawTargetFolder = false;
         
         private string limitCompareTextureFolderPath;
         private string atlasTextureFolderPath;
@@ -103,6 +105,7 @@ namespace SimilarTextureCheckTool
         private GUIStyle spriteTipsStyle;
         private GUIStyle doubleMatchTitleStyle;
         private GUIStyle singleMatchTitleStyle;
+        private GUIStyle foldOutStyle;
         #endregion
 
         #region 操作弹窗相关
@@ -121,6 +124,7 @@ namespace SimilarTextureCheckTool
             window.InitStyles();
             window.LoadPrefs();
             window.LoadCacheData();
+            window.LoadModifyPathsSaveCacheAndUpdateData();
         }
         private void InitStyles()
         {
@@ -134,6 +138,20 @@ namespace SimilarTextureCheckTool
                 doubleMatchTitleStyle.fontSize = 16;
                 singleMatchTitleStyle = new GUIStyle("ProfilerSelectedLabel");
                 singleMatchTitleStyle.fontSize = 16;
+                foldOutStyle = new GUIStyle(EditorStyles.foldout)
+                {
+                    fontStyle = FontStyle.Bold,
+                    fontSize = 20,
+                    normal =
+                    {
+                        textColor = headTitleStyle.normal.textColor
+                    },
+                    onNormal = 
+                    {
+                        textColor = headTitleStyle.normal.textColor
+                    }
+                };
+                
                 initedStyles = true;
             }
         }
@@ -145,6 +163,8 @@ namespace SimilarTextureCheckTool
             LoadFolderPrefByPath(SimilarTextureCheckToolUtil.SourceTextureRootPathName, ref sourceTextureFolderPath, ref sourceTextureRootFolderAsset);
             ImageHistogramThreshold = (double)EditorPrefs.GetFloat(SimilarTextureCheckToolUtil.ImageHistogramThresholdKey, (float)ImageHistogramThreshold);
             PerceptualHashThreshold = EditorPrefs.GetInt(SimilarTextureCheckToolUtil.PerceptualHashThresholdKey, PerceptualHashThreshold);
+            FoldOutDrawTipInfos = EditorPrefs.GetBool(SimilarTextureCheckToolUtil.FoldOutDrawTipInfosKey, false);
+            FoldOutDrawTargetFolder = EditorPrefs.GetBool(SimilarTextureCheckToolUtil.FoldOutDrawTargetFolderKey, false);
         }
 
         private void LoadFolderPrefByPath(string prefKey, ref string path, ref DefaultAsset folderAsset)
@@ -170,7 +190,7 @@ namespace SimilarTextureCheckTool
                     try
                     {
                         List<SimilarTextureCacheData> cacheList = (List<SimilarTextureCacheData>) bf.Deserialize(fs);
-                        cacheSimilarData = CreateInstance<SimilarTextureCacheAsset>();
+                        cacheSimilarData = new SimilarTextureCacheAsset();
                         cacheSimilarData.savedCacheDataList = cacheList;
                         cacheSimilarData.Init();
                     }
@@ -186,6 +206,32 @@ namespace SimilarTextureCheckTool
             }
         }
         
+        // 读取缓存下来的资源变动，重新生成缓存和引用数据
+        private void LoadModifyPathsSaveCacheAndUpdateData()
+        {
+            if (File.Exists(SimilarTextureCheckToolUtil.ModifyPathsSavePath))
+            {
+                //反序列化数据
+                FileStream fs = File.OpenRead(SimilarTextureCheckToolUtil.ModifyPathsSavePath);
+                try
+                {
+                    BinaryFormatter bf = new BinaryFormatter();
+                    EditorUtility.DisplayCancelableProgressBar("正在导入缓存修改记录", "读取中...", 0);
+                    List<string> cacheImportedList = (List<string>) bf.Deserialize(fs);
+                    List<string> cacheDeletedList = (List<string>) bf.Deserialize(fs);
+                    List<string> cacheMovedList = (List<string>) bf.Deserialize(fs);
+                    List<string> cacheMovedFromList = (List<string>) bf.Deserialize(fs);
+                    EditorUtility.ClearProgressBar();
+                    UpdateTextureResourcesAndCacheHashAndHistogramData(cacheImportedList, cacheDeletedList, cacheMovedList, cacheMovedFromList);
+                }
+                finally
+                {
+                    fs.Close();
+                }
+                // 完成更新后，删除这个缓存文件
+                File.Delete(SimilarTextureCheckToolUtil.ModifyPathsSavePath);
+            }
+        }
         #region 界面布局逻辑
 
         private void OnGUI()
@@ -234,36 +280,53 @@ namespace SimilarTextureCheckTool
             GUI.backgroundColor = Color.white;
             EditorGUILayout.Space();
         }
-
-        private void DrawTargetFolder()
-        {
-            EditorGUILayout.LabelField("限制对比范围", headTitleStyle, GUILayout.Height(40));
-            EditorGUILayout.LabelField("如果设置了此文件夹，则会预计算这个文件夹内的图片特征信息，并只对这个文件夹内的图片进行相似性比对");
-            DrawTipsRootFolder("指定对比相似图片的文件夹", SimilarTextureCheckToolUtil.LimitCompareTexturePathName, 
-                ref limitCompareTextureFolderAsset, ref limitCompareTextureFolderPath);
-            EditorGUILayout.Space();
-        }
+        
         /// <summary>
         /// 绘制工具tips内容，以及相关文件夹注册的GUI控件
         /// </summary>
         private void DrawTipInfos()
         {
-            EditorGUILayout.LabelField("图集相关设置", headTitleStyle, GUILayout.Height(40));
-#if UNITY_2020_1_OR_NEWER
-            EditorGUILayout.LabelField(new GUIContent(SimilarTextureCheckToolUtil.SpriteWarningTips, 
-                EditorGUIUtility.IconContent("console.warnicon@2x").image), spriteTipsStyle);
-#else
-            EditorGUILayout.HelpBox(SimilarTextureCheckToolUtil.SpriteWarningTips, MessageType.Warning);
-#endif
-            EditorGUILayout.BeginHorizontal();
-            DrawTipsRootFolder("图集根目录", SimilarTextureCheckToolUtil.AtlasTextureRootPathName, 
-                ref atlasTextureRootFolderAsset, ref atlasTextureFolderPath);
-            DrawTipsRootFolder("源texture根目录", SimilarTextureCheckToolUtil.SourceTextureRootPathName, 
-                ref sourceTextureRootFolderAsset, ref sourceTextureFolderPath);
+            EditorGUILayout.BeginHorizontal(GUILayout.Height(30));
+            FoldOutDrawTipInfos = EditorGUILayout.Foldout(FoldOutDrawTipInfos, "图集相关设置", true, foldOutStyle);
             EditorGUILayout.EndHorizontal();
-            EditorGUILayout.Space();
+            if (FoldOutDrawTipInfos)
+            {
+#if UNITY_2020_1_OR_NEWER
+                EditorGUILayout.LabelField(new GUIContent(SimilarTextureCheckToolUtil.SpriteWarningTips, 
+                    EditorGUIUtility.IconContent("console.warnicon@2x").image), spriteTipsStyle);
+#else
+                EditorGUILayout.HelpBox(SimilarTextureCheckToolUtil.SpriteWarningTips, MessageType.Warning);
+#endif
+                EditorGUILayout.BeginHorizontal();
+                DrawTipsRootFolder("图集根目录", SimilarTextureCheckToolUtil.AtlasTextureRootPathName, 
+                    ref atlasTextureRootFolderAsset, ref atlasTextureFolderPath);
+                DrawTipsRootFolder("源texture根目录", SimilarTextureCheckToolUtil.SourceTextureRootPathName, 
+                    ref sourceTextureRootFolderAsset, ref sourceTextureFolderPath);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.Space();
+            }
         }
 
+        private void DrawTargetFolder()
+        {
+            EditorGUILayout.BeginHorizontal(GUILayout.Height(30));
+            FoldOutDrawTargetFolder = EditorGUILayout.Foldout(FoldOutDrawTargetFolder, "限制对比范围", true, foldOutStyle);
+            EditorGUILayout.EndHorizontal();
+
+            if (FoldOutDrawTargetFolder)
+            {
+#if UNITY_2020_1_OR_NEWER
+                EditorGUILayout.LabelField(new GUIContent(SimilarTextureCheckToolUtil.TargetFolderWarningTips, 
+                    EditorGUIUtility.IconContent("console.warnicon@2x").image), spriteTipsStyle);
+#else
+                EditorGUILayout.HelpBox(SimilarTextureCheckToolUtil.TargetFolderWarningTips, MessageType.Warning);
+#endif
+                DrawTipsRootFolder("指定对比相似图片的文件夹", SimilarTextureCheckToolUtil.LimitCompareTexturePathName, 
+                    ref limitCompareTextureFolderAsset, ref limitCompareTextureFolderPath);
+                EditorGUILayout.Space();
+            }
+        }
+        
         private void DrawTipsRootFolder(string header, string prefKey, ref DefaultAsset folderAsset, ref string cachePath)
         {
             EditorGUI.BeginChangeCheck();
@@ -446,8 +509,9 @@ namespace SimilarTextureCheckTool
             string curTexPath = checkTexPathList[k];
             bool isDeleted = checkTexDeleteMarkList[k];
             GUI.Box(new Rect(0, height, rect.width, itemHeight), GUIContent.none, EditorStyles.helpBox);
+            float startHeight = height + 5;
             // 当前查看的图片的信息，需要详实地罗列出来
-            Rect btnRect = new Rect(5, height, previewTexSize, previewTexSize);
+            Rect btnRect = new Rect(5, startHeight, previewTexSize, previewTexSize);
             if (!isDeleted && GUI.Button(btnRect, curTex))
             {
                 EditorGUIUtility.PingObject(curTex); 
@@ -464,29 +528,29 @@ namespace SimilarTextureCheckTool
             contentNum += showMatchNum > 0 ? 1 : 0;
             float contentYOffset = (h - detailSpace * contentNum) / 2 ;
             
-            GUI.Label(new Rect(previewTexSize + 10, height + contentYOffset, rect.width - previewTexSize, detailHeight),
+            GUI.Label(new Rect(previewTexSize + 10, startHeight + contentYOffset, rect.width - previewTexSize, detailHeight),
                 string.Format("搜索图片名称：{0}", curTex.name));
-            GUI.Label(new Rect(previewTexSize + 10, height + detailSpace + contentYOffset, rect.width - previewTexSize, detailHeight),
+            GUI.Label(new Rect(previewTexSize + 10, startHeight + detailSpace + contentYOffset, rect.width - previewTexSize, detailHeight),
                 string.Format("搜索图片所在路径：{0}", curTexPath));
-            GUI.Label(new Rect(previewTexSize + 10, height + detailSpace * 2 + contentYOffset, rect.width - previewTexSize, detailHeight),
+            GUI.Label(new Rect(previewTexSize + 10, startHeight + detailSpace * 2 + contentYOffset, rect.width - previewTexSize, detailHeight),
                 string.Format("搜索图片尺寸：{0}x{1}", curTex.width, curTex.height));
             if (!isDeleted && fileInfo != null)
             {
-                GUI.Label(new Rect(previewTexSize + 10, height + detailSpace * 3 + contentYOffset, rect.width - previewTexSize, detailHeight),
+                GUI.Label(new Rect(previewTexSize + 10, startHeight + detailSpace * 3 + contentYOffset, rect.width - previewTexSize, detailHeight),
                     string.Format("搜索图片大小：{0} KB", (fileInfo.Length / 1024d).ToString("F")));
             }
             else
             {
-                GUI.Label(new Rect(previewTexSize + 10, height + detailSpace * 3 + contentYOffset, rect.width - previewTexSize, detailHeight),
+                GUI.Label(new Rect(previewTexSize + 10, startHeight + detailSpace * 3 + contentYOffset, rect.width - previewTexSize, detailHeight),
                     "<color=#ff0000>搜索图片已被删除！</color>");
             }
-            if (GUI.Button(new Rect(previewTexSize + 10, height + detailSpace * 4 + contentYOffset, 200, detailHeight), 
+            if (GUI.Button(new Rect(previewTexSize + 10, startHeight + detailSpace * 4 + contentYOffset, 200, detailHeight), 
                     "打开批量操作面板"))
             {
                 OnClickBatchModifyButton(k, curTexPath, totalDoubleMatchedSimilarTextures[k], totalSingleMatchedSimilarTextures[k]);
             }
             
-            h += height + 5f;
+            h += startHeight + 5f;
             if (showMatchNum <= 0)
             {
                 GUI.Label(new Rect(5, h, rect.width, 22), 
@@ -571,45 +635,37 @@ namespace SimilarTextureCheckTool
             EditorApplication.update += GetTexturePathDelegate;
         }
 
-        private void LoadModifyPathsSaveCacheAndUpdateData()
-        {
-            if (File.Exists(SimilarTextureCheckToolUtil.ModifyPathsSavePath))
-            {
-                //反序列化数据
-                FileStream fs = File.OpenRead(SimilarTextureCheckToolUtil.ModifyPathsSavePath);
-                try
-                {
-                    BinaryFormatter bf = new BinaryFormatter();
-                    EditorUtility.DisplayCancelableProgressBar("正在导入缓存修改记录", "读取中...", 0);
-                    List<string> cacheImportedList = (List<string>) bf.Deserialize(fs);
-                    List<string> cacheDeletedList = (List<string>) bf.Deserialize(fs);
-                    List<string> cacheMovedList = (List<string>) bf.Deserialize(fs);
-                    List<string> cacheMovedFromList = (List<string>) bf.Deserialize(fs);
-                    EditorUtility.ClearProgressBar();
-                    UpdateTextureResourcesAndCacheHashAndHistogramData(cacheImportedList, cacheDeletedList, cacheMovedList, cacheMovedFromList);
-                }
-                finally
-                {
-                    fs.Close();
-                }
-                // 完成更新后，删除这个缓存文件
-                File.Delete(SimilarTextureCheckToolUtil.ModifyPathsSavePath);
-            }
-        }
-
+        /// <summary>
+        /// 读取缓存下来的资产变动缓存，刷新图片特征值信息和引用关系数据
+        /// </summary>
+        /// <param name="importedAssets"></param>
+        /// <param name="deletedAssets"></param>
+        /// <param name="movedAssets"></param>
+        /// <param name="movedFromAssets"></param>
         private void UpdateTextureResourcesAndCacheHashAndHistogramData(
-            List<string> importedList,
-            List<string> deletedList,
-            List<string> movedList,
-            List<string> movedFromList)
+            List<string> importedAssets,
+            List<string> deletedAssets,
+            List<string> movedAssets,
+            List<string> movedFromAssets)
         {
+            List<string> importedTexList = new List<string>();
+            List<string> deletedTexList = new List<string>();
+            List<string> movedTexList = new List<string>();
+            List<string> movedFromTexList = new List<string>();
+            
+            // 处理图片特征值，就筛选出纯图片资源到单独的列表来处理
+            SimilarTextureCheckToolUtil.FilterTextureAssetPaths(importedAssets, ref importedTexList);
+            SimilarTextureCheckToolUtil.FilterTextureAssetPaths(deletedAssets, ref deletedTexList);
+            SimilarTextureCheckToolUtil.FilterTextureAssetPaths(movedAssets, ref movedTexList);
+            SimilarTextureCheckToolUtil.FilterTextureAssetPaths(movedFromAssets, ref movedFromTexList);
+            
             bool needSaveAsset = false;
             bool needCheckAtlas = !string.Empty.Equals(atlasTextureFolderPath) && !string.Empty.Equals(sourceTextureFolderPath);
             // 删除，直接清掉已有缓存
             // 这个最好先于导入和移动处理，但需要判断是否是图集，图集在对比的时候是溯源的，因此图集不处理
-            if (deletedList.Count > 0)
+            if (deletedTexList.Count > 0)
             {
-                foreach (var texPath in deletedList)
+                foreach (var texPath in deletedTexList)
                 {
                     if(needCheckAtlas && texPath.Contains(atlasTextureFolderPath)) // 跳过图集
                         continue;
@@ -620,10 +676,10 @@ namespace SimilarTextureCheckTool
             
             // 移动，尽量不重新计算，而是移动键值
             // 同样，对于图集的文件不进行处理
-            if (movedList.Count > 0 && movedFromList.Count > 0 && movedList.Count == movedFromList.Count)
+            if (movedTexList.Count > 0 && movedFromTexList.Count > 0 && movedTexList.Count == movedFromTexList.Count)
             {
                 mergeMovedPathsMap.Clear();
-                foreach (var oldPath in movedFromList)
+                foreach (var oldPath in movedFromTexList)
                 {
                     if(needCheckAtlas && oldPath.Contains(atlasTextureFolderPath)) // 跳过图集
                         continue;
@@ -632,7 +688,7 @@ namespace SimilarTextureCheckTool
                         mergeMovedPathsMap.Add(fileName, oldPath);
                 }
                 // 新文件可能是改了名的，因此这里还是需要有一个创建缓存的保底机制 
-                foreach (var newPath in movedList)
+                foreach (var newPath in movedTexList)
                 {
                     string fileName = Path.GetFileName(newPath);
                     if(needCheckAtlas && newPath.Contains(atlasTextureFolderPath)) // 跳过图集
@@ -649,7 +705,7 @@ namespace SimilarTextureCheckTool
                         else
                         {
                             // 重新创建，放到导入列表就行
-                            importedList.Add(newPath);
+                            importedTexList.Add(newPath);
                         }
                         cacheSimilarData.TryRemoveCacheData(oldPath);
                         mergeMovedPathsMap.Remove(fileName);
@@ -662,7 +718,7 @@ namespace SimilarTextureCheckTool
                     else
                     {
                         // 重新创建，放到导入列表就行
-                        importedList.Add(newPath);
+                        importedTexList.Add(newPath);
                     }
                 }
                 // 找到没有成功更换的缓存，直接删除
@@ -676,11 +732,11 @@ namespace SimilarTextureCheckTool
                 }
             }
             
+            texturePaths.Clear();
             // 新增导入，直接创建插入
-            if (importedList.Count > 0)
+            if (importedTexList.Count > 0)
             {
-                texturePaths.Clear();
-                foreach (var texPath in importedList)
+                foreach (var texPath in importedTexList)
                 {
                     if(needCheckAtlas && texPath.Contains(atlasTextureFolderPath)) // 跳过图集
                         continue;
@@ -695,6 +751,17 @@ namespace SimilarTextureCheckTool
                     EditorApplication.update += ProcessTextureDelegate;
                 }
             }
+            
+            // 处理资源引用更新
+            InitReferenceFinderData();
+            List<string> needDeleteList = new List<string>();
+            needDeleteList.AddRange(deletedAssets);
+            needDeleteList.AddRange(movedFromAssets);
+            List<string> needAppendList = new List<string>();
+            needAppendList.AddRange(importedAssets);
+            needAppendList.AddRange(movedAssets);
+            referenceFinderData.UpdateAssetsData(needAppendList, needDeleteList);
+            
             // 没有新增，则在这里调度保存
             if (needSaveAsset)
             {
@@ -781,7 +848,7 @@ namespace SimilarTextureCheckTool
         {
             if (cacheSimilarData == null)
             {
-                cacheSimilarData = CreateInstance<SimilarTextureCacheAsset>();
+                cacheSimilarData = new SimilarTextureCacheAsset();
                 cacheSimilarData.AppendCacheDataFormTempDic(tempCacheSimilarDict);
             }
             else
@@ -924,7 +991,7 @@ namespace SimilarTextureCheckTool
             CollectingCacheData = true;
             if (cacheSimilarData == null)
             {
-                cacheSimilarData = CreateInstance<SimilarTextureCacheAsset>();
+                cacheSimilarData = new SimilarTextureCacheAsset();
             }
             // 这个列表每次调度比对前都会初始化和填入数据，因此如果该列表有数据则代表是限制了文件夹比对
             if (limitFolderTexList.Count > 0)
@@ -1277,6 +1344,14 @@ namespace SimilarTextureCheckTool
         {
             referenceFinderData.UpdateAssetState(guid);
         }
+
+        public void UpdateReferenceInfoAfterReplacement(string guidOld, string guidNew, Dictionary<string, string> refDatas)
+        {
+            if (referenceFinderData != null)
+            {
+                referenceFinderData.UpdateReferenceInfoAfterReplacement(guidOld, guidNew, refDatas);
+            }
+        }
         
         /// <summary>
         /// 获取图片的匹配结果
@@ -1367,7 +1442,6 @@ namespace SimilarTextureCheckTool
         
         private void OnClickResultTexture(int index, string searchTexPath, SimilarTextureCacheData matchCacheData, bool isDoubleMatch)
         {
-            SimilarTextureCacheData searchTexCacheData = cacheSimilarData.TryGetCacheData(searchTexPath);
             List<SimilarTextureCacheData> doubleMatchCacheDataList = new List<SimilarTextureCacheData>();
             List<SimilarTextureCacheData> singleMatchCacheDataList = new List<SimilarTextureCacheData>();
             if (isDoubleMatch)
@@ -1414,6 +1488,13 @@ namespace SimilarTextureCheckTool
         {
             ClearAllCacheData();
             cacheSimilarData = null;
+            // 按需更新缓存
+            if (referenceFinderData != null)
+            {
+                referenceFinderData.SaveAllCacheToDisk();
+            }
+            EditorPrefs.SetBool(SimilarTextureCheckToolUtil.FoldOutDrawTipInfosKey, FoldOutDrawTipInfos);
+            EditorPrefs.SetBool(SimilarTextureCheckToolUtil.FoldOutDrawTargetFolderKey, FoldOutDrawTargetFolder);
             GC.Collect();
         }
         #endregion

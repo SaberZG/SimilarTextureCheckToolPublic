@@ -8,10 +8,6 @@ namespace SimilarTextureCheckTool
 {
     public class SimilarTextureCheckToolAssetPostprocessor : AssetPostprocessor
     {
-        private static List<string> importedList = new List<string>();
-        private static List<string> deletedList = new List<string>();
-        private static List<string> movedList = new List<string>();
-        private static List<string> movedFromList = new List<string>();
         /// <summary>
         /// 需要修改的路径合集字典，path为资产相对路径
         /// int:0代表importedList，1代表deletedList，2代表movedList，3代表movedFromList，与OnPostprocessAllAssets的顺序一致
@@ -73,21 +69,9 @@ namespace SimilarTextureCheckTool
                 totalModifyPathsDict.Add(path, val);
             }
         }
-        
-        private static void FilterTextureAssetPaths(string[] assetPaths, ref List<string> list)
-        {
-            list.Clear();
-            foreach (var path in assetPaths)
-            {
-                if (path.EndsWith(".png") || path.EndsWith(".jpg") || path.EndsWith(".jpeg") || path.EndsWith(".tga") || path.EndsWith(".bmp"))
-                {
-                    list.Add(path);
-                }
-            }
-        }
-        
+
         /// <summary>
-        /// 监听资源变动，更新本地缓存
+        /// 监听资源变动，更新至本地缓存
         /// </summary>
         /// <param name="importedAssets">包含了所有被导入的资源的路径(导入资源，复制资源等行为)</param>
         /// <param name="deletedAssets">包含了所有被删除的资源的路径</param>
@@ -101,28 +85,23 @@ namespace SimilarTextureCheckTool
         )
         {
             LoadCacheData();
-
-            FilterTextureAssetPaths(importedAssets, ref importedList);
-            FilterTextureAssetPaths(deletedAssets, ref deletedList);
-            FilterTextureAssetPaths(movedAssets, ref movedList);
-            FilterTextureAssetPaths(movedFromAssetPaths, ref movedFromList);
             
-            foreach (var path in importedList)
+            foreach (var path in importedAssets)
             {
                 SetOrAddCache(path, 0);
                 // Debug.LogFormat("importedAssets : {0}", path);
             }
-            foreach (var path in deletedList)
+            foreach (var path in deletedAssets)
             {
                 SetOrAddCache(path, 1);
                 // Debug.LogFormat("deletedAssets : {0}", path);
             }
-            foreach (var path in movedList)
+            foreach (var path in movedAssets)
             {
                 SetOrAddCache(path, 2);
                 // Debug.LogFormat("movedAssets : {0}", path);
             }
-            foreach (var path in movedFromList)
+            foreach (var path in movedFromAssetPaths)
             {
                 SetOrAddCache(path, 3);
                 // Debug.LogFormat("movedFromAssetPaths : {0}", path);
