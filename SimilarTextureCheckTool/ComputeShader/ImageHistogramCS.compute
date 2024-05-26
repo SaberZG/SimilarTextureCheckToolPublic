@@ -1,0 +1,61 @@
+#pragma kernel ImageHistogram
+
+Texture2D<float4> _TexRes;
+// RWStructuredBuffer<float> _TexHistogramBuffer;
+RWStructuredBuffer<int> _HistogramDataInt;
+float4 _TexexParams; // x:texWidth y:texHeight z:1.0/texWidth w:1.0/texHeight 
+
+/// 直方图等分配置：
+/// 为4时，意味着对0~255范围内的颜色值进行64等分成4个区间
+/// 为16时意味着按16等分成16个区间
+/// 即：越精细，就越准确，但内存开销越大
+#define redBins 8
+#define greenBins 8
+#define blueBins 8
+#define histogramDataSize redBins*greenBins*blueBins
+
+#define NUMBERTHREAD_X 16
+#define NUMBERTHREAD_Y 16
+#define NUMBERTHREAD_Z 1
+
+/**
+ * \brief 
+ * \param binCount 直方图等分数
+ * \param color 0.0 ~ 1.0范围的颜色值
+ * \return 
+ */
+float getBinIndex(int binCount, float color) {
+    float binIndex = color * ((float) binCount);
+    if (binIndex >= binCount)
+        binIndex = binCount - 1;
+    return binIndex;
+}
+
+// groupshared int histogramData[histogramDataSize];
+[numthreads(NUMBERTHREAD_X, NUMBERTHREAD_Y, NUMBERTHREAD_Z)]
+void ImageHistogram(uint3 id : SV_DispatchThreadID)
+{
+    int2 texelPos = id.xy;
+    int histogramId = texelPos.x + texelPos.y * _TexexParams.x;
+    // if(histogramId < histogramDataSize)
+    // {
+    //     histogramData[histogramId] = 0;
+    // }
+    GroupMemoryBarrierWithGroupSync();
+    if(texelPos.x < _TexexParams.x && texelPos.y < _TexexParams.y)
+    {
+        float4 col = _TexRes[texelPos];
+        int redIdx = (int)getBinIndex(redBins, col.r);
+        int greenIdx = (int)getBinIndex(redBins, col.g);
+        int blueIdx = (int)getBinIndex(redBins, col.b);
+        int singleIndex = redIdx + greenIdx * redBins + blueIdx * redBins * greenBins;
+        // InterlockedAdd(histogramData[singleIndex], 1);
+        InterlockedAdd(_HistogramDataInt[singleIndex], 1);
+    }
+    // GroupMemoryBarrierWithGroupSync();
+    // 直方图数据归一化(不在CS做了，精度不足)
+    // if(histogramId < histogramDataSize)
+    // {
+    //     _TexHistogramBuffer[histogramId] = (float)(histogramData[histogramId]) * (_TexexParams.z * _TexexParams.w);
+    // }
+}

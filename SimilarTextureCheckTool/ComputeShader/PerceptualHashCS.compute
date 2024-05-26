@@ -1,0 +1,50 @@
+#pragma kernel PerceptualHash
+
+Texture2D<float4> _TexRes; // 压缩过后的纹理 压缩后的尺寸为32x32
+RWStructuredBuffer<float> _DCTData; // todo：格式不一定是uint
+
+#define TEXTURE_SIZE 32
+#define NUMBERTHREAD_X 32
+#define NUMBERTHREAD_Y 32
+#define NUMBERTHREAD_Z 1
+#define SMALLERSIZE 8
+#define PI 3.1415926
+
+groupshared float GrayData[TEXTURE_SIZE * TEXTURE_SIZE];
+groupshared int BlueData[TEXTURE_SIZE * TEXTURE_SIZE];
+groupshared float total;
+
+inline float CalculateDCT(int2 texelPos)
+{
+    float sum = 0;
+    for(int i = 0; i < TEXTURE_SIZE; i++)
+    {
+        for(int j = 0; j < TEXTURE_SIZE; j++)
+        {
+            int index = j * TEXTURE_SIZE + i;
+            int blue = BlueData[index];
+            sum += cos(((2 * i + 1) / (2.0 * TEXTURE_SIZE)) * texelPos.x * PI) * cos(((2 * j + 1) / (2.0 * TEXTURE_SIZE)) * texelPos.y * PI) * blue;
+        }
+    }
+    return sum;
+}
+
+[numthreads(NUMBERTHREAD_X, NUMBERTHREAD_Y, NUMBERTHREAD_Z)]
+void PerceptualHash(uint3 id : SV_DispatchThreadID)
+{
+    int2 texelPos = id.xy;
+    int index = texelPos.y * TEXTURE_SIZE + texelPos.x;
+    float4 col = _TexRes[texelPos];
+    float gray = 0.299 * col.r + 0.587 * col.g + 0.114 * col.b;
+    int blue = (int)(gray * 255) & 0xff;
+    GrayData[index] = gray;
+    BlueData[index] = blue;
+    if(texelPos.x == 0 & texelPos.y == 0)
+    {
+        total = 0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    
+    float dct = CalculateDCT(texelPos);
+    _DCTData[index] = dct;
+}
